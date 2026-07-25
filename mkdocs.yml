@@ -1,0 +1,41 @@
+site_name: rig
+site_description: Transform repositories into queryable engineering graphs.
+repo_url: https://github.com/pjxcharya/rig
+repo_name: pjxcharya/rig
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      media: "(prefers-color-scheme: light)"
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      media: "(prefers-color-scheme: dark)"
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Specifications:
+      - System Architecture: specs/ARCHITECTURE.md
+      - Graph Schema: specs/GRAPH_SCHEMA.md
+      - Intermediate Representation: specs/IR_SPEC.md
+      - Plugin Specification: specs/PLUGIN_SPEC.md
+      - Query Specification: specs/QUERY_SPEC.md
+  - Architecture Decisions:
+      - Overview: adr/index.md
+      - ADR-001 Graph-first Architecture: adr/0001-graph-first-architecture.md
+      - ADR-002 Intermediate Representation: adr/0002-intermediate-representation.md
+      - ADR-003 Plugin System: adr/0003-plugin-system.md
+      - ADR-004 Storage Backend: adr/0004-storage-backend.md
+      - ADR-005 Parser Interface: adr/0005-parser-interface.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
