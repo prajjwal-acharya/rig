@@ -4,14 +4,22 @@
 
 Proposed | Accepted | Superseded by ADR-NNNN | Deprecated
 
+## Date
+
+YYYY-MM-DD
+
 ## Context
 
-What is the issue that we're seeing that is motivating this decision?
+What issue, constraint, or opportunity is motivating this decision?
 
 ## Decision
 
-What is the change that we're proposing and/or doing?
+What change are we proposing or accepting?
+
+## Alternatives Considered
+
+What other approaches were evaluated, and why were they not chosen?
 
 ## Consequences
 
-What becomes easier or more difficult to do because of this change?
+What becomes easier or harder because of this decision?

@@ -21,6 +21,8 @@ theme:
 
 nav:
   - Home: index.md
+  - Development:
+      - Commit History: development/commit-history.md
   - Specifications:
       - System Architecture: specs/ARCHITECTURE.md
       - Graph Schema: specs/GRAPH_SCHEMA.md
