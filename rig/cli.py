@@ -5,6 +5,7 @@ import sys
 import time
 from collections.abc import Sequence
 
+from rig.languages import RepositoryLanguageReport, detect_repository_languages
 from rig.plugins import PluginCache, PluginContext, PluginLogger, PluginManager
 from rig.scanner import (
     FilteredWalkResult,
@@ -70,7 +71,13 @@ def _build_snapshot(path: str) -> tuple[RepositorySnapshot, FilteredWalkResult]:
     return snapshot, enriched
 
 
-def _print_verbose_files(snapshot: RepositorySnapshot) -> None:
+def _print_verbose_files(
+    snapshot: RepositorySnapshot, language_report: RepositoryLanguageReport
+) -> None:
+    languages_by_path = {
+        entry.file.relative_path: entry.language for entry in language_report.files
+    }
+
     for file in sorted(snapshot.files, key=lambda f: f.relative_path.as_posix()):
         print(file.relative_path.as_posix())
         metadata = file.metadata
@@ -80,7 +87,21 @@ def _print_verbose_files(snapshot: RepositorySnapshot) -> None:
             print(f"  SHA256: {checksum[:8] + '...' if checksum else 'N/A'}")
             print(f"  Modified: {metadata.modified_at:%Y-%m-%d}")
             print(f"  Hidden: {'Yes' if metadata.is_hidden else 'No'}")
+        language = languages_by_path.get(file.relative_path)
+        if language is not None:
+            print(f"  Language: {language.display_name}")
         print()
+
+
+def _print_language_statistics(report: RepositoryLanguageReport) -> None:
+    print("Languages:")
+    if not report.statistics:
+        print("  (None)")
+        return
+
+    name_width = max(len(entry.language.display_name) for entry in report.statistics)
+    for entry in report.statistics:
+        print(f"  {entry.language.display_name:<{name_width}}  {entry.count:>7}")
 
 
 def run_scan(path: str, *, verbose: bool = False) -> int:
@@ -91,6 +112,8 @@ def run_scan(path: str, *, verbose: bool = False) -> int:
     except (RepositoryPathNotFoundError, RepositoryPathNotADirectoryError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    language_report = detect_repository_languages(snapshot.files)
 
     plugin_manager = PluginManager()
     plugin_context = PluginContext(
@@ -116,8 +139,7 @@ def run_scan(path: str, *, verbose: bool = False) -> int:
         print(f"  {ignored_entry}")
     print()
 
-    print("Languages:")
-    print("  (Not implemented)")
+    _print_language_statistics(language_report)
     print()
 
     print("Plugins:")
@@ -129,7 +151,7 @@ def run_scan(path: str, *, verbose: bool = False) -> int:
     print()
 
     if verbose:
-        _print_verbose_files(snapshot)
+        _print_verbose_files(snapshot, language_report)
 
     print(f"Scan completed in {elapsed_ms:.0f} ms")
     return 0
