@@ -8,11 +8,16 @@ requires-python = ">=3.10"
 authors = [
     { name = "Prajjwal Acharya", email = "a.prajjwal1729@gmail.com" },
 ]
-dependencies = []
+dependencies = [
+    "pathspec>=0.12.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/pjxcharya/rig"
 Issues = "https://github.com/pjxcharya/rig/issues"
+
+[project.scripts]
+rig = "rig.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -41,7 +46,7 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.10"
-packages = ["rig"]
+packages = ["rig", "tests"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
