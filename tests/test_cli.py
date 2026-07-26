@@ -68,14 +68,34 @@ def test_scan_shows_none_when_nothing_ignored(
     assert "(None)" in ignored_section
 
 
-def test_scan_shows_placeholders_for_languages_and_plugins(
+def test_scan_shows_none_for_languages_and_plugins_when_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     main(["scan", str(tmp_path)])
     output = capsys.readouterr().out
 
-    assert "Languages:\n  (Not implemented)" in output
+    assert "Languages:\n  (None)" in output
     assert "Plugins:\n  (None)" in output
+
+
+def test_scan_reports_language_statistics(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(tmp_path / "main.py", "print('hi')")
+    _write(tmp_path / "other.py", "print('bye')")
+    _write(tmp_path / "README.md", "# repo")
+    _write(tmp_path / "LICENSE", "license text")
+
+    main(["scan", str(tmp_path)])
+    output = capsys.readouterr().out
+
+    languages_section = output.split("Languages:")[1].split("Plugins:")[0]
+    assert "Python" in languages_section
+    assert "Markdown" in languages_section
+    assert "Unknown" in languages_section
+    python_line_index = languages_section.index("Python")
+    markdown_line_index = languages_section.index("Markdown")
+    assert python_line_index < markdown_line_index  # Python (2) before Markdown (1)
 
 
 def test_scan_verbose_shows_per_file_metadata(
@@ -91,6 +111,7 @@ def test_scan_verbose_shows_per_file_metadata(
     assert "SHA256:" in output
     assert "Modified:" in output
     assert "Hidden: No" in output
+    assert "Language: Text" in output
 
 
 def test_scan_without_verbose_omits_per_file_metadata(
