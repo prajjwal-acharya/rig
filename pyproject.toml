@@ -10,7 +10,7 @@ authors = [
 ]
 dependencies = [
     "pathspec>=0.12.0",
-    "tree-sitter>=0.23.0",
+    "tree-sitter>=0.23.0,<0.26.0",
     "tree-sitter-go>=0.23.0",
 ]
 
