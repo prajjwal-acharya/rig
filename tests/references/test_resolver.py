@@ -6,8 +6,8 @@ from tests.references.conftest import build_repository_and_symbols
 
 
 def _resolve(sources: dict[str, str]):
-    repository, symbols, parsed_files = build_repository_and_symbols(sources)
-    index = GoReferenceResolver(parsed_files).resolve(repository, symbols)
+    repository, symbols, _ = build_repository_and_symbols(sources)
+    index = GoReferenceResolver().resolve(repository, symbols)
     return repository, symbols, index
 
 
@@ -193,9 +193,9 @@ def test_empty_file_produces_no_references_except_package() -> None:
 
 def test_resolution_is_deterministic_across_repeated_runs() -> None:
     sources = {"a.go": "package p\n\nfunc helper() {}\n\nfunc Foo() {\n\thelper()\n}\n"}
-    repository, symbols, parsed_files = build_repository_and_symbols(sources)
+    repository, symbols, _ = build_repository_and_symbols(sources)
 
-    first = GoReferenceResolver(parsed_files).resolve(repository, symbols)
-    second = GoReferenceResolver(parsed_files).resolve(repository, symbols)
+    first = GoReferenceResolver().resolve(repository, symbols)
+    second = GoReferenceResolver().resolve(repository, symbols)
 
     assert [r.id for r in first.references()] == [r.id for r in second.references()]

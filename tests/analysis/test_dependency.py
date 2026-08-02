@@ -16,10 +16,10 @@ from rig.analysis.dependency import (
     DependencyGraph,
     DependencyKind,
 )
+from rig.frontends.go import GoIRBuilder
 from rig.graph.builders.structural import StructuralGraphBuilder
 from rig.graph.model import RelationshipType
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import build_repository_ir
 from rig.languages import DEFAULT_REGISTRY
 from rig.languages.pipeline import LanguageAnnotatedFile
@@ -66,7 +66,7 @@ def _package_id(context: AnalysisContext, name: str) -> str:
 
 
 def _run(context: AnalysisContext, parsed: tuple[ParsedFile, ...]) -> AnalysisResult:
-    manager = AnalysisManager(AnalysisRegistry([DependencyAnalysis(parsed)]))
+    manager = AnalysisManager(AnalysisRegistry([DependencyAnalysis()]))
     return manager.execute_one(DEPENDENCY_ANALYSIS_ID, context)
 
 
@@ -114,13 +114,13 @@ def test_empty_dependency_graph() -> None:
 
 
 def test_registers_normally() -> None:
-    registry = AnalysisRegistry([DependencyAnalysis([])])
+    registry = AnalysisRegistry([DependencyAnalysis()])
 
     assert registry.lookup(DEPENDENCY_ANALYSIS_ID) is not None
 
 
 def test_required_capabilities_exclude_reference_index() -> None:
-    analysis = DependencyAnalysis([])
+    analysis = DependencyAnalysis()
 
     assert analysis.required_capabilities == frozenset(
         {Capability.IR, Capability.SYMBOL_TABLE, Capability.GRAPH}
@@ -130,7 +130,7 @@ def test_required_capabilities_exclude_reference_index() -> None:
 def test_manager_rejects_execution_when_a_capability_is_missing() -> None:
     from rig.ir.repository import RepositoryIR
 
-    manager = AnalysisManager(AnalysisRegistry([DependencyAnalysis([])]))
+    manager = AnalysisManager(AnalysisRegistry([DependencyAnalysis()]))
     context = AnalysisContext(repository=RepositoryIR(id="repo:1", root=Path("/repo")))
 
     result = manager.execute_one(DEPENDENCY_ANALYSIS_ID, context)
@@ -483,9 +483,9 @@ def test_metadata_counts_each_kind(tmp_path: Path) -> None:
 def test_dependency_analysis_via_manager_end_to_end(tmp_path: Path) -> None:
     _write(tmp_path, "api/a.go", 'package api\n\nimport "myrepo/service"\n\nfunc F() {}\n')
     _write(tmp_path, "service/b.go", "package service\n\nfunc G() {}\n")
-    context, parsed = _build_context(tmp_path, ["api/a.go", "service/b.go"])
+    context, _ = _build_context(tmp_path, ["api/a.go", "service/b.go"])
 
-    manager = AnalysisManager(AnalysisRegistry([DependencyAnalysis(parsed)]))
+    manager = AnalysisManager(AnalysisRegistry([DependencyAnalysis()]))
     results = manager.execute_all(context)
 
     assert len(results) == 1

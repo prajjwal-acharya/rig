@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from pathlib import Path
 
 from rig.analysis.capability import Capability
 from rig.analysis.context import AnalysisContext
@@ -13,10 +12,8 @@ from rig.analysis.result import AnalysisResult
 from rig.graph.builder import GraphAccumulator
 from rig.graph.identifiers import edge_id
 from rig.graph.model import Edge, Graph, RelationshipType
-from rig.ir.model import File, SourceLocation
+from rig.ir.model import DeclaredTypeUses, MethodTypeUses, SourceLocation
 from rig.ir.repository import RepositoryIR
-from rig.parsers.pipeline import ParsedFile
-from rig.parsers.treesitter.tree import SyntaxNode, SyntaxTree
 from rig.symbols.table import SymbolTable
 from rig.types.builder import GoTypeBuilder
 from rig.types.index import TypeIndex
@@ -101,69 +98,6 @@ class TypeRelationshipGraph:
         return len(self.edges)
 
 
-# Go's predeclared type names - never repository declarations, so field/
-# parameter/return/alias references to them are silently ignored (neither
-# a relationship nor a diagnostic), mirroring GoReferenceResolver's handling
-# of predeclared identifiers.
-_GO_BUILTIN_TYPES = frozenset(
-    {
-        "any",
-        "bool",
-        "byte",
-        "complex64",
-        "complex128",
-        "error",
-        "float32",
-        "float64",
-        "int",
-        "int8",
-        "int16",
-        "int32",
-        "int64",
-        "rune",
-        "string",
-        "uint",
-        "uint8",
-        "uint16",
-        "uint32",
-        "uint64",
-        "uintptr",
-    }
-)
-
-
-def _location(relative_path: Path, node: SyntaxNode) -> SourceLocation:
-    return SourceLocation(
-        relative_path=relative_path,
-        start_line=node.start_point.row,
-        start_column=node.start_point.column,
-        end_line=node.end_point.row,
-        end_column=node.end_point.column,
-        start_byte=node.start_byte,
-        end_byte=node.end_byte,
-    )
-
-
-def _text(node: SyntaxNode) -> str:
-    return node.text.decode("utf-8", errors="replace")
-
-
-def _unwrap_named_type(node: SyntaxNode) -> SyntaxNode | None:
-    # Only a bare name, or a single pointer indirection to one, is treated
-    # as a directly identifiable named type. Qualified names (import-
-    # qualified, out of scope), slices, maps, arrays, channels, function
-    # types, and generic instantiations are all deliberately unsupported -
-    # they are not "explicit language constructs" naming a single repo type.
-    if node.type == "type_identifier":
-        return node
-    if node.type == "pointer_type":
-        inner = next(iter(node.named_children()), None)
-        if inner is not None and inner.type == "type_identifier":
-            return inner
-        return None
-    return None
-
-
 def _enrich_graph(graph: Graph, relationship_graph: TypeRelationshipGraph) -> Graph:
     metadata = replace(
         graph.metadata,
@@ -190,7 +124,7 @@ def _enrich_graph(graph: Graph, relationship_graph: TypeRelationshipGraph) -> Gr
 
 class _Collector:
     """Accumulates deduplicated relationships and diagnostics while a
-    repository's syntax trees are walked once. Not part of the public API -
+    repository's IR type-use facts are consumed. Not part of the public API -
     an internal helper for TypeRelationshipAnalysis.execute().
     """
 
@@ -229,8 +163,6 @@ class _Collector:
     def resolve_type_name(
         self, name: str, package: str | None, location: SourceLocation
     ) -> Type | None:
-        if name in _GO_BUILTIN_TYPES:
-            return None
         candidates = [t for t in self.type_index.by_name(name) if t.package == package]
         if len(candidates) > 1:
             self.diagnose(
@@ -262,167 +194,83 @@ def _relationship_key(relationship: TypeRelationship) -> tuple[str, str, str]:
     return (relationship.source_id, relationship.target_id, relationship.kind.value)
 
 
-def _process_struct_fields(
-    struct_type: SyntaxNode,
-    declaring: Type,
-    file: File,
-    collector: _Collector,
-) -> None:
-    field_list = next(
-        (c for c in struct_type.named_children() if c.type == "field_declaration_list"), None
-    )
-    if field_list is None:
-        return
-
-    for field_decl in field_list.named_children():
-        if field_decl.type != "field_declaration":
-            continue
-        type_node = field_decl.child_by_field_name("type")
-        if type_node is None:
-            continue
-        named = _unwrap_named_type(type_node)
-        if named is None:
-            continue
-
-        location = _location(file.relative_path, named)
-        target = collector.resolve_type_name(_text(named), file.package_name, location)
-        if target is None:
-            continue
-
-        is_embedded = field_decl.child_by_field_name("name") is None
-        kind = (
-            TypeRelationshipKind.EMBEDS
-            if is_embedded
-            else TypeRelationshipKind.DECLARES_FIELD_OF_TYPE
+def _process_declared_type(declared: DeclaredTypeUses, collector: _Collector) -> None:
+    if declared.is_generic:
+        collector.diagnose(
+            message=f"unsupported declaration: generic type {declared.name!r}",
+            category="unsupported-declaration",
+            location=declared.location,
         )
-        collector.add(declaring.declaration_id, target.declaration_id, kind)
-
-
-def _process_alias(
-    type_alias: SyntaxNode,
-    declaring: Type,
-    file: File,
-    collector: _Collector,
-) -> None:
-    underlying = type_alias.child_by_field_name("type")
-    if underlying is None:
-        return
-    named = _unwrap_named_type(underlying)
-    if named is None:
         return
 
-    location = _location(file.relative_path, named)
-    target = collector.resolve_type_name(_text(named), file.package_name, location)
-    if target is None:
-        return
-
-    collector.add(declaring.declaration_id, target.declaration_id, TypeRelationshipKind.ALIASES)
-
-
-def _process_type_declaration(
-    type_declaration: SyntaxNode, file: File, collector: _Collector
-) -> None:
-    for spec in type_declaration.named_children():
-        if spec.type == "type_spec":
-            name_node = spec.child_by_field_name("name")
-            underlying = spec.child_by_field_name("type")
-            if name_node is None or underlying is None:
+    if declared.kind == "struct":
+        declaring = collector.find_declaring_type(
+            declared.name, declared.package, declared.start_line
+        )
+        if declaring is None:
+            return  # defensive: GoTypeBuilder should always have indexed this declaration
+        for field_use in declared.fields:
+            name = field_use.target.name
+            if name is None:
                 continue
-
-            if spec.child_by_field_name("type_parameters") is not None:
-                collector.diagnose(
-                    message=f"unsupported declaration: generic type {_text(name_node)!r}",
-                    category="unsupported-declaration",
-                    location=_location(file.relative_path, spec),
-                )
+            target = collector.resolve_type_name(name, declared.package, field_use.target.location)
+            if target is None:
                 continue
-
-            declaring = collector.find_declaring_type(
-                _text(name_node), file.package_name, spec.start_point.row
+            kind = (
+                TypeRelationshipKind.EMBEDS
+                if field_use.is_embedded
+                else TypeRelationshipKind.DECLARES_FIELD_OF_TYPE
             )
-            if declaring is None:
-                continue  # defensive: GoTypeBuilder should always have indexed this declaration
-            if underlying.type == "struct_type":
-                _process_struct_fields(underlying, declaring, file, collector)
+            collector.add(declaring.declaration_id, target.declaration_id, kind)
 
-        elif spec.type == "type_alias":
-            name_node = spec.child_by_field_name("name")
-            if name_node is None:
-                continue
-            declaring = collector.find_declaring_type(
-                _text(name_node), file.package_name, spec.start_point.row
-            )
-            if declaring is None:
-                continue
-            _process_alias(spec, declaring, file, collector)
+    elif declared.kind == "alias":
+        declaring = collector.find_declaring_type(
+            declared.name, declared.package, declared.start_line
+        )
+        if declaring is None:
+            return
+        alias_target = declared.alias_target
+        if alias_target is None or alias_target.name is None:
+            return
+        target = collector.resolve_type_name(
+            alias_target.name, declared.package, alias_target.location
+        )
+        if target is None:
+            return
+        collector.add(declaring.declaration_id, target.declaration_id, TypeRelationshipKind.ALIASES)
 
 
-def _process_method_declaration(method: SyntaxNode, file: File, collector: _Collector) -> None:
-    receiver = method.child_by_field_name("receiver")
-    if receiver is None:
-        return
-    receiver_decl = next(iter(receiver.named_children()), None)
-    if receiver_decl is None:
-        return
-    receiver_type_node = receiver_decl.child_by_field_name("type")
-    if receiver_type_node is None:
-        return
-
-    named = _unwrap_named_type(receiver_type_node)
-    if named is None:
+def _process_method(method: MethodTypeUses, collector: _Collector) -> None:
+    if method.receiver.name is None:
         collector.diagnose(
             message="unsupported declaration: method receiver is not a simple named type",
             category="unsupported-declaration",
-            location=_location(file.relative_path, receiver_type_node),
+            location=method.receiver.location,
         )
         return
 
-    receiver_location = _location(file.relative_path, named)
-    declaring = collector.resolve_type_name(_text(named), file.package_name, receiver_location)
+    declaring = collector.resolve_type_name(
+        method.receiver.name, method.package, method.receiver.location
+    )
     if declaring is None:
         return
 
-    parameters = method.child_by_field_name("parameters")
-    if parameters is not None:
-        for parameter in parameters.named_children():
-            if parameter.type != "parameter_declaration":
-                continue
-            type_node = parameter.child_by_field_name("type")
-            if type_node is None:
-                continue
-            param_named = _unwrap_named_type(type_node)
-            if param_named is None:
-                continue
-            location = _location(file.relative_path, param_named)
-            target = collector.resolve_type_name(_text(param_named), file.package_name, location)
-            if target is None:
-                continue
-            collector.add(
-                declaring.declaration_id,
-                target.declaration_id,
-                TypeRelationshipKind.DECLARES_METHOD_PARAMETER,
-            )
+    for parameter in method.parameters:
+        if parameter.name is None:
+            continue
+        target = collector.resolve_type_name(parameter.name, method.package, parameter.location)
+        if target is None:
+            continue
+        collector.add(
+            declaring.declaration_id,
+            target.declaration_id,
+            TypeRelationshipKind.DECLARES_METHOD_PARAMETER,
+        )
 
-    result = method.child_by_field_name("result")
-    if result is None:
-        return
-    result_nodes = (
-        [
-            c.child_by_field_name("type")
-            for c in result.named_children()
-            if c.type == "parameter_declaration"
-        ]
-        if result.type == "parameter_list"
-        else [result]
-    )
-    for type_node in result_nodes:
-        if type_node is None:
+    for result in method.returns:
+        if result.name is None:
             continue
-        result_named = _unwrap_named_type(type_node)
-        if result_named is None:
-            continue
-        location = _location(file.relative_path, result_named)
-        target = collector.resolve_type_name(_text(result_named), file.package_name, location)
+        target = collector.resolve_type_name(result.name, method.package, result.location)
         if target is None:
             continue
         collector.add(
@@ -432,38 +280,21 @@ def _process_method_declaration(method: SyntaxNode, file: File, collector: _Coll
         )
 
 
-def _process_file(file: File, tree: SyntaxTree, collector: _Collector) -> None:
-    for child in tree.root.named_children():
-        if child.type == "type_declaration":
-            _process_type_declaration(child, file, collector)
-        elif child.type == "method_declaration":
-            _process_method_declaration(child, file, collector)
-
-
 class TypeRelationshipAnalysis(Analysis):
     """Discovers structural relationships between repository-declared types
     (embedding, aliasing, field/parameter/return type usage) and enriches
     the Knowledge Graph with them.
 
-    Requires the parsed syntax trees (not just RepositoryIR + SymbolTable)
-    because struct fields and method parameter/return type annotations are
-    intentionally absent from the IR - Tree-sitter access is confined
-    entirely to this analysis, mirroring GoReferenceResolver's precedent.
-    Type name resolution itself is delegated to the Type Index/SymbolTable
-    (via GoTypeBuilder) rather than reconstructed from syntax.
+    Language-neutral: it consumes the IR's type-use facts (`DeclaredTypeUses`
+    / `MethodTypeUses`) that a frontend already extracted, and resolves type
+    names via the Type Index / Symbol Table. It never touches a syntax tree,
+    so nothing here would change for a future non-Go frontend.
 
     Deliberately does not attempt: interface satisfaction, inheritance,
     generic constraints, method sets, promoted methods, type checking,
     assignability, conversions, pointer analysis, reflection, or import
-    resolution (qualified `pkg.Type` references are skipped entirely).
+    resolution (qualified `pkg.Type` references are not modeled here).
     """
-
-    def __init__(self, parsed_files: Sequence[ParsedFile]) -> None:
-        self._trees_by_path: dict[Path, SyntaxTree] = {
-            parsed.file.relative_path: parsed.result.syntax_tree
-            for parsed in parsed_files
-            if parsed.result.success and parsed.result.syntax_tree is not None
-        }
 
     @property
     def analysis_id(self) -> str:
@@ -495,10 +326,10 @@ class TypeRelationshipAnalysis(Analysis):
         collector = _Collector(type_index)
 
         for file in repository.files:
-            tree = self._trees_by_path.get(file.relative_path)
-            if tree is None:
-                continue
-            _process_file(file, tree, collector)
+            for declared in file.declared_type_uses:
+                _process_declared_type(declared, collector)
+            for method in file.method_type_uses:
+                _process_method(method, collector)
 
         relationship_graph = collector.build()
         enriched_graph = _enrich_graph(graph, relationship_graph)

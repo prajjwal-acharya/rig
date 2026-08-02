@@ -16,19 +16,19 @@ from rig.analysis import (
     DependencyAnalysis,
     TypeRelationshipAnalysis,
 )
+from rig.frontends.go import GoIRBuilder
 from rig.graph.builders.imports import ImportGraphBuilder
 from rig.graph.builders.structural import StructuralGraphBuilder
 from rig.graph.model import Graph
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import RepositoryIR, build_repository_ir
 from rig.languages.pipeline import RepositoryLanguageReport, detect_repository_languages
+from rig.parsers.factory import build_default_parser_registry
 from rig.parsers.manager import ParserManager
 from rig.parsers.pipeline import ParsedFile, parse_repository_files
-from rig.parsers.treesitter.factory import build_default_registry as build_parser_registry
 from rig.references.builder import ReferenceGraphBuilder
 from rig.references.index import ReferenceIndex
-from rig.references.resolver import GoReferenceResolver
+from rig.references.resolver import IRReferenceResolver
 from rig.scanner.errors import RepositoryPathNotADirectoryError, RepositoryPathNotFoundError
 from rig.scanner.ignore import IgnoreEngine
 from rig.scanner.locator import locate_repository
@@ -89,7 +89,7 @@ def build_language_report(snapshot: RepositorySnapshot) -> RepositoryLanguageRep
 def build_parsed_files(
     root: Path, language_report: RepositoryLanguageReport
 ) -> tuple[ParsedFile, ...]:
-    parser_manager = ParserManager(build_parser_registry())
+    parser_manager = ParserManager(build_default_parser_registry())
     return parse_repository_files(root, language_report.files, parser_manager)
 
 
@@ -102,10 +102,8 @@ def build_symbol_table(repository: RepositoryIR) -> SymbolTable:
     return GoSymbolTableBuilder().build(repository)
 
 
-def build_reference_index(
-    parsed_files: Sequence[ParsedFile], repository: RepositoryIR, symbols: SymbolTable
-) -> ReferenceIndex:
-    return GoReferenceResolver(parsed_files).resolve(repository, symbols)
+def build_reference_index(repository: RepositoryIR, symbols: SymbolTable) -> ReferenceIndex:
+    return IRReferenceResolver().resolve(repository, symbols)
 
 
 def build_type_index(repository: RepositoryIR, symbols: SymbolTable) -> TypeIndex:
@@ -136,7 +134,6 @@ def run_semantic_analyses(
     symbols: SymbolTable,
     references: ReferenceIndex,
     graph: Graph,
-    parsed_files: Sequence[ParsedFile],
 ) -> SemanticAnalysisResult:
     # Each analysis enriches the graph independently, so the resulting
     # graph from one is threaded into the context for the next - this is
@@ -146,8 +143,8 @@ def run_semantic_analyses(
     registry = AnalysisRegistry(
         [
             CallGraphAnalysis(),
-            TypeRelationshipAnalysis(parsed_files),
-            DependencyAnalysis(parsed_files),
+            TypeRelationshipAnalysis(),
+            DependencyAnalysis(),
         ]
     )
     manager = AnalysisManager(registry)

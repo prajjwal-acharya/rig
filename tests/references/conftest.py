@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rig.frontends.go import GoIRBuilder
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import RepositoryIR, build_repository_ir
 from rig.languages import DEFAULT_REGISTRY
 from rig.languages.model import Language
