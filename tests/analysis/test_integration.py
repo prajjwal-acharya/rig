@@ -10,9 +10,9 @@ from rig.analysis import (
     AnalysisResult,
     Capability,
 )
+from rig.frontends.go import GoIRBuilder
 from rig.graph.builders.structural import StructuralGraphBuilder
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import build_repository_ir
 from rig.languages import DEFAULT_REGISTRY
 from rig.languages.pipeline import LanguageAnnotatedFile
@@ -79,7 +79,7 @@ def test_full_pipeline_through_analysis_manager(tmp_path: Path) -> None:
     repository = build_repository_ir(tmp_path, parsed, ir_registry)
 
     symbols = GoSymbolTableBuilder().build(repository)
-    references = GoReferenceResolver(parsed).resolve(repository, symbols)
+    references = GoReferenceResolver().resolve(repository, symbols)
     graph = StructuralGraphBuilder().build(repository)
 
     context = AnalysisContext(

@@ -8,8 +8,8 @@ from tests.references.conftest import build_repository_and_symbols
 
 
 def _resolve_and_build_graph(sources: dict[str, str]) -> tuple[Graph, Graph]:
-    repository, symbols, parsed_files = build_repository_and_symbols(sources)
-    index = GoReferenceResolver(parsed_files).resolve(repository, symbols)
+    repository, symbols, _ = build_repository_and_symbols(sources)
+    index = GoReferenceResolver().resolve(repository, symbols)
     structural_graph = StructuralGraphBuilder().build(repository)
     enriched = ReferenceGraphBuilder().build(index, symbols, structural_graph)
     return structural_graph, enriched
@@ -84,10 +84,10 @@ def test_empty_reference_index_adds_no_edges() -> None:
 
 
 def test_build_is_deterministic() -> None:
-    repository, symbols, parsed_files = build_repository_and_symbols(
+    repository, symbols, _ = build_repository_and_symbols(
         {"a.go": "package p\n\nfunc helper() {}\n\nfunc Foo() {\n\thelper()\n}\n"}
     )
-    index = GoReferenceResolver(parsed_files).resolve(repository, symbols)
+    index = GoReferenceResolver().resolve(repository, symbols)
     structural_graph = StructuralGraphBuilder().build(repository)
 
     first = ReferenceGraphBuilder().build(index, symbols, structural_graph)

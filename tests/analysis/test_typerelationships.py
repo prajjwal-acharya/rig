@@ -16,10 +16,10 @@ from rig.analysis.typerelationships import (
     TypeRelationshipGraph,
     TypeRelationshipKind,
 )
+from rig.frontends.go import GoIRBuilder
 from rig.graph.builders.structural import StructuralGraphBuilder
 from rig.graph.model import RelationshipType
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import build_repository_ir
 from rig.languages import DEFAULT_REGISTRY
 from rig.languages.pipeline import LanguageAnnotatedFile
@@ -72,7 +72,7 @@ def _type_declaration_id(context: AnalysisContext, name: str) -> str:
 
 
 def _run(context: AnalysisContext, parsed: tuple[ParsedFile, ...]) -> AnalysisResult:
-    manager = AnalysisManager(AnalysisRegistry([TypeRelationshipAnalysis(parsed)]))
+    manager = AnalysisManager(AnalysisRegistry([TypeRelationshipAnalysis()]))
     return manager.execute_one(TYPE_RELATIONSHIP_ANALYSIS_ID, context)
 
 
@@ -109,13 +109,13 @@ def test_empty_relationship_graph() -> None:
 
 
 def test_registers_normally() -> None:
-    registry = AnalysisRegistry([TypeRelationshipAnalysis([])])
+    registry = AnalysisRegistry([TypeRelationshipAnalysis()])
 
     assert registry.lookup(TYPE_RELATIONSHIP_ANALYSIS_ID) is not None
 
 
 def test_required_capabilities_exclude_reference_index() -> None:
-    analysis = TypeRelationshipAnalysis([])
+    analysis = TypeRelationshipAnalysis()
 
     assert analysis.required_capabilities == frozenset(
         {Capability.IR, Capability.SYMBOL_TABLE, Capability.GRAPH}
@@ -125,7 +125,7 @@ def test_required_capabilities_exclude_reference_index() -> None:
 def test_manager_rejects_execution_when_a_capability_is_missing() -> None:
     from rig.ir.repository import RepositoryIR
 
-    manager = AnalysisManager(AnalysisRegistry([TypeRelationshipAnalysis([])]))
+    manager = AnalysisManager(AnalysisRegistry([TypeRelationshipAnalysis()]))
     context = AnalysisContext(repository=RepositoryIR(id="repo:1", root=Path("/repo")))
 
     result = manager.execute_one(TYPE_RELATIONSHIP_ANALYSIS_ID, context)
@@ -524,9 +524,9 @@ def test_type_relationship_analysis_via_manager_end_to_end(tmp_path: Path) -> No
         "a.go",
         "package p\n\ntype Logger struct{}\n\ntype Server struct {\n\tLogger\n}\n",
     )
-    context, parsed = _build_context(tmp_path, ["a.go"])
+    context, _ = _build_context(tmp_path, ["a.go"])
 
-    manager = AnalysisManager(AnalysisRegistry([TypeRelationshipAnalysis(parsed)]))
+    manager = AnalysisManager(AnalysisRegistry([TypeRelationshipAnalysis()]))
     results = manager.execute_all(context)
 
     assert len(results) == 1

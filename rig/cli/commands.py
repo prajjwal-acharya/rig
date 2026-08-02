@@ -369,7 +369,7 @@ def run_references(path: str, *, verbose: bool = False) -> int:
         progress("Building Symbol Table")
         symbols = build_symbol_table(repository)
         progress("Resolving References")
-        references = build_reference_index(parsed_files, repository, symbols)
+        references = build_reference_index(repository, symbols)
     except PipelineError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -477,14 +477,12 @@ def run_graph(path: str, *, verbose: bool = False) -> int:
         progress("Building Symbol Table")
         symbols = build_symbol_table(repository)
         progress("Resolving References")
-        references = build_reference_index(parsed_files, repository, symbols)
+        references = build_reference_index(repository, symbols)
         progress("Building Graph")
         graph = build_structural_graph(repository)
         graph = enrich_graph_with_references(references, symbols, graph)
         progress("Running Analyses")
-        analysis_result = run_semantic_analyses(
-            repository, symbols, references, graph, parsed_files
-        )
+        analysis_result = run_semantic_analyses(repository, symbols, references, graph)
         graph = analysis_result.graph
     except PipelineError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -535,16 +533,14 @@ def run_analyze(path: str) -> int:
         progress("Building Symbol Table")
         symbols = build_symbol_table(repository)
         progress("Resolving References")
-        references = build_reference_index(parsed_files, repository, symbols)
+        references = build_reference_index(repository, symbols)
         progress("Building Type Index")
         type_index = build_type_index(repository, symbols)
         progress("Building Graph")
         graph = build_structural_graph(repository)
         graph = enrich_graph_with_references(references, symbols, graph)
         progress("Running Analyses")
-        analysis_result = run_semantic_analyses(
-            repository, symbols, references, graph, parsed_files
-        )
+        analysis_result = run_semantic_analyses(repository, symbols, references, graph)
         graph = analysis_result.graph
     except PipelineError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -611,13 +607,11 @@ def run_stats(path: str) -> int:
         parsed_files = build_parsed_files(snapshot.root, language_report)
         repository = build_repository(snapshot.root, parsed_files)
         symbols = build_symbol_table(repository)
-        references = build_reference_index(parsed_files, repository, symbols)
+        references = build_reference_index(repository, symbols)
         type_index = build_type_index(repository, symbols)
         graph = build_structural_graph(repository)
         graph = enrich_graph_with_references(references, symbols, graph)
-        analysis_result = run_semantic_analyses(
-            repository, symbols, references, graph, parsed_files
-        )
+        analysis_result = run_semantic_analyses(repository, symbols, references, graph)
     except PipelineError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

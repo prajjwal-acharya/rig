@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rig.ir.builders.go import GoIRBuilder
+from rig.frontends.go import GoIRBuilder
 from rig.ir.identifiers import repository_id
 from rig.ir.model import (
     FunctionDeclaration,

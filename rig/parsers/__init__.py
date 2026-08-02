@@ -1,4 +1,5 @@
 from rig.parsers.errors import DuplicateParserError
+from rig.parsers.factory import build_default_parser_registry
 from rig.parsers.interface import Parser
 from rig.parsers.manager import ParserManager
 from rig.parsers.model import Diagnostic, DiagnosticSeverity, ParseContext, ParseResult
@@ -18,6 +19,7 @@ __all__ = [
     "ParserManager",
     "ParserRegistry",
     "PythonParserStub",
+    "build_default_parser_registry",
     "build_stub_registry",
     "parse_repository_files",
 ]

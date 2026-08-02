@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rig.frontends.go import GoIRBuilder
 from rig.graph.builders.structural import StructuralGraphBuilder
 from rig.graph.model import RelationshipType
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import build_repository_ir
 from rig.languages import DEFAULT_REGISTRY
 from rig.languages.pipeline import LanguageAnnotatedFile
@@ -49,7 +49,7 @@ def test_full_pipeline_from_scanner_to_enriched_graph(tmp_path: Path) -> None:
     repository = build_repository_ir(tmp_path, parsed, ir_registry)
 
     symbols = GoSymbolTableBuilder().build(repository)
-    reference_index = GoReferenceResolver(parsed).resolve(repository, symbols)
+    reference_index = GoReferenceResolver().resolve(repository, symbols)
 
     resolved_functions = [
         r

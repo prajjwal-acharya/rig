@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from pathlib import Path
 
 from rig.analysis.capability import Capability
 from rig.analysis.context import AnalysisContext
@@ -14,10 +13,8 @@ from rig.graph.builder import GraphAccumulator
 from rig.graph.identifiers import edge_id
 from rig.graph.model import Edge, Graph, RelationshipType
 from rig.graph.properties import Properties
-from rig.ir.model import File, ImportDeclaration, SourceLocation
+from rig.ir.model import File, ImportDeclaration, QualifiedUseKind, SourceLocation
 from rig.ir.repository import Package, RepositoryIR
-from rig.parsers.pipeline import ParsedFile
-from rig.parsers.treesitter.tree import SyntaxNode, SyntaxTree
 
 DEPENDENCY_ANALYSIS_ID = "dependency-analysis"
 DEPENDENCY_ANALYSIS_VERSION = "1.0.0"
@@ -107,26 +104,6 @@ class DependencyGraph:
         return len(self.edges)
 
 
-def _location(relative_path: Path, node: SyntaxNode) -> SourceLocation:
-    return SourceLocation(
-        relative_path=relative_path,
-        start_line=node.start_point.row,
-        start_column=node.start_point.column,
-        end_line=node.end_point.row,
-        end_column=node.end_point.column,
-        start_byte=node.start_byte,
-        end_byte=node.end_byte,
-    )
-
-
-def _text(node: SyntaxNode) -> str:
-    return node.text.decode("utf-8", errors="replace")
-
-
-def _is_exported(name: str) -> bool:
-    return bool(name) and name[0].isupper()
-
-
 def _resolve_import_target(
     import_path: str, packages_by_name: Mapping[str, Package]
 ) -> Package | None:
@@ -147,16 +124,6 @@ def _imports_by_qualifier(file: File) -> dict[str, ImportDeclaration]:
             qualifier = declaration.alias or declaration.import_path.rsplit("/", 1)[-1]
             result[qualifier] = declaration
     return result
-
-
-def _unwrap_qualified_type(node: SyntaxNode) -> SyntaxNode | None:
-    if node.type == "qualified_type":
-        return node
-    if node.type == "pointer_type":
-        inner = next(iter(node.named_children()), None)
-        if inner is not None and inner.type == "qualified_type":
-            return inner
-    return None
 
 
 def _enrich_graph(graph: Graph, dependency_graph: DependencyGraph) -> Graph:
@@ -193,8 +160,8 @@ def _enrich_graph(graph: Graph, dependency_graph: DependencyGraph) -> Graph:
 
 class _Collector:
     """Accumulates deduplicated dependency edges and diagnostics while a
-    repository's syntax trees are walked once. Not part of the public API -
-    an internal helper for DependencyAnalysis.execute().
+    repository's IR dependency-use facts are consumed. Not part of the public
+    API - an internal helper for DependencyAnalysis.execute().
     """
 
     def __init__(self) -> None:
@@ -245,26 +212,18 @@ def _process_import(
     collector.add(source_package.id, target.id, DependencyKind.IMPORT)
 
 
-def _handle_qualified_reference(
-    qualified_type: SyntaxNode,
-    file: File,
+def _handle_qualified_type(
+    qualifier: str,
+    location: SourceLocation,
     source_package: Package,
     imports_by_qualifier: Mapping[str, ImportDeclaration],
     packages_by_name: Mapping[str, Package],
     collector: _Collector,
-    kind: DependencyKind,
 ) -> None:
-    package_node = qualified_type.child_by_field_name("package")
-    if package_node is None:
-        return
-    qualifier = _text(package_node)
-    location = _location(file.relative_path, qualified_type)
-
     import_declaration = imports_by_qualifier.get(qualifier)
     if import_declaration is None:
-        # `qualified_type` is unambiguous package.Type syntax (unlike a call's
-        # selector_expression, which could just as easily be a method call on
-        # a value) - a qualifier not matching any import is a genuine anomaly.
+        # A package-qualified type whose qualifier matches no import is a
+        # genuine anomaly (unlike a call's selector, which could be a method).
         collector.diagnose(
             message=f"unknown package: {qualifier!r}",
             category="unknown-package",
@@ -287,164 +246,56 @@ def _handle_qualified_reference(
         )
         return
 
-    collector.add(source_package.id, target.id, kind)
+    collector.add(source_package.id, target.id, DependencyKind.TYPE)
 
 
-def _process_struct_fields_for_type_deps(
-    struct_type: SyntaxNode,
-    file: File,
+def _handle_qualified_call(
+    qualifier: str,
+    location: SourceLocation,
     source_package: Package,
     imports_by_qualifier: Mapping[str, ImportDeclaration],
     packages_by_name: Mapping[str, Package],
     collector: _Collector,
 ) -> None:
-    field_list = next(
-        (c for c in struct_type.named_children() if c.type == "field_declaration_list"), None
-    )
-    if field_list is None:
+    import_declaration = imports_by_qualifier.get(qualifier)
+    if import_declaration is None:
+        # A qualifier matching no import is almost certainly a method call on a
+        # value (`x.Method()`) - inherently ambiguous with a package-qualified
+        # call at this level; silently skip, not an error.
         return
 
-    for field_declaration in field_list.named_children():
-        if field_declaration.type != "field_declaration":
-            continue
-        type_node = field_declaration.child_by_field_name("type")
-        if type_node is None:
-            continue
-        qualified = _unwrap_qualified_type(type_node)
-        if qualified is None:
-            continue
-        _handle_qualified_reference(
-            qualified,
-            file,
-            source_package,
-            imports_by_qualifier,
-            packages_by_name,
-            collector,
-            DependencyKind.TYPE,
+    target = _resolve_import_target(import_declaration.import_path, packages_by_name)
+    if target is None:
+        return
+
+    if target.id == source_package.id:
+        collector.diagnose(
+            message=(
+                f"cyclic self-dependency: package {source_package.name!r} "
+                f"calls itself via {qualifier!r}"
+            ),
+            category="cyclic-self-dependency",
+            location=location,
         )
+        return
+
+    collector.add(source_package.id, target.id, DependencyKind.CALL)
 
 
-def _process_type_declaration_for_deps(
-    type_declaration: SyntaxNode,
-    file: File,
-    source_package: Package,
-    imports_by_qualifier: Mapping[str, ImportDeclaration],
-    packages_by_name: Mapping[str, Package],
-    collector: _Collector,
-) -> None:
-    # Only PUBLIC (exported) type declarations are considered dependency
-    # sources here - an unexported type using another package's type still
-    # requires that import, but this analysis's TYPE dependency kind is
-    # scoped to a package's exported surface, per the milestone spec.
-    for spec in type_declaration.named_children():
-        if spec.type == "type_spec":
-            name_node = spec.child_by_field_name("name")
-            underlying = spec.child_by_field_name("type")
-            if name_node is None or underlying is None:
-                continue
-
-            if spec.child_by_field_name("type_parameters") is not None:
-                collector.diagnose(
-                    message=f"unsupported dependency source: generic type {_text(name_node)!r}",
-                    category="unsupported-dependency-source",
-                    location=_location(file.relative_path, spec),
-                )
-                continue
-
-            if not _is_exported(_text(name_node)):
-                continue
-
-            if underlying.type == "struct_type":
-                _process_struct_fields_for_type_deps(
-                    underlying,
-                    file,
-                    source_package,
-                    imports_by_qualifier,
-                    packages_by_name,
-                    collector,
-                )
-            else:
-                qualified = _unwrap_qualified_type(underlying)
-                if qualified is not None:
-                    _handle_qualified_reference(
-                        qualified,
-                        file,
-                        source_package,
-                        imports_by_qualifier,
-                        packages_by_name,
-                        collector,
-                        DependencyKind.TYPE,
-                    )
-
-        elif spec.type == "type_alias":
-            name_node = spec.child_by_field_name("name")
-            underlying = spec.child_by_field_name("type")
-            if name_node is None or underlying is None:
-                continue
-            if not _is_exported(_text(name_node)):
-                continue
-            qualified = _unwrap_qualified_type(underlying)
-            if qualified is not None:
-                _handle_qualified_reference(
-                    qualified,
-                    file,
-                    source_package,
-                    imports_by_qualifier,
-                    packages_by_name,
-                    collector,
-                    DependencyKind.TYPE,
-                )
-
-
-def _walk_for_call_deps(
-    root: SyntaxNode,
-    file: File,
-    source_package: Package,
-    imports_by_qualifier: Mapping[str, ImportDeclaration],
-    packages_by_name: Mapping[str, Package],
-    collector: _Collector,
-) -> None:
-    stack: list[SyntaxNode] = [root]
-    while stack:
-        current = stack.pop()
-
-        if current.type == "call_expression":
-            function_node = current.child_by_field_name("function")
-            if function_node is not None:
-                if function_node.type == "selector_expression":
-                    operand = function_node.child_by_field_name("operand")
-                    if operand is not None and operand.type == "identifier":
-                        qualifier = _text(operand)
-                        import_declaration = imports_by_qualifier.get(qualifier)
-                        if import_declaration is not None:
-                            target = _resolve_import_target(
-                                import_declaration.import_path, packages_by_name
-                            )
-                            if target is not None:
-                                location = _location(file.relative_path, current)
-                                if target.id == source_package.id:
-                                    collector.diagnose(
-                                        message=(
-                                            f"cyclic self-dependency: package "
-                                            f"{source_package.name!r} calls itself via {qualifier!r}"
-                                        ),
-                                        category="cyclic-self-dependency",
-                                        location=location,
-                                    )
-                                else:
-                                    collector.add(source_package.id, target.id, DependencyKind.CALL)
-                        # else: qualifier matches no import - almost certainly
-                        # a method call on a value (`x.Method()`), which is
-                        # inherently ambiguous with a package-qualified call
-                        # at this syntax level - silently skip, not an error.
-                elif function_node.type != "identifier":
-                    collector.diagnose(
-                        message="unsupported dependency source: unrecognized call target shape",
-                        category="unsupported-dependency-source",
-                        location=_location(file.relative_path, current),
-                    )
-
-        stack.extend(current.named_children())
+def _report_unsupported(file: File, collector: _Collector) -> None:
+    for unsupported in file.unsupported_dependency_uses:
+        if unsupported.reason == "generic_type":
+            collector.diagnose(
+                message=f"unsupported dependency source: generic type {unsupported.name!r}",
+                category="unsupported-dependency-source",
+                location=unsupported.location,
+            )
+        elif unsupported.reason == "unrecognized_call":
+            collector.diagnose(
+                message="unsupported dependency source: unrecognized call target shape",
+                category="unsupported-dependency-source",
+                location=unsupported.location,
+            )
 
 
 class DependencyAnalysis(Analysis):
@@ -452,30 +303,17 @@ class DependencyAnalysis(Analysis):
     usage, cross-package function calls) and enriches the Knowledge Graph
     with `DEPENDS_ON` edges.
 
-    Requires the parsed syntax trees (not just RepositoryIR + SymbolTable)
-    for the same reason CallGraphAnalysis and TypeRelationshipAnalysis do:
-    cross-package type/call usage is expressed via qualified references
-    (`pkg.Type`, `pkg.Func()`) that earlier milestones deliberately left
-    unresolved (CallGraph and TypeRelationshipGraph are, by construction,
-    intra-package only - qualified/selector references were explicitly out
-    of scope wherever they were produced). Consuming those artifacts here
-    would therefore surface no cross-package information at all; this
-    analysis performs its own qualified-reference walk instead, while still
-    resolving *which* repository package a reference belongs to via
-    RepositoryIR's packages rather than reconstructing that from scratch.
+    Language-neutral: it consumes the IR's `ImportDeclaration`s and the
+    qualified-use facts (`QualifiedUse`) that a frontend already extracted,
+    resolving each qualifier to a repository package via the IR's packages. It
+    never touches a syntax tree, so nothing here would change for a future
+    non-Go frontend.
 
     Deliberately does not attempt: cycle detection, layer validation,
     architectural rule enforcement, transitive reduction, build graph
     optimization, import resolution outside the repository, or versioned
     modules.
     """
-
-    def __init__(self, parsed_files: Sequence[ParsedFile]) -> None:
-        self._trees_by_path: dict[Path, SyntaxTree] = {
-            parsed.file.relative_path: parsed.result.syntax_tree
-            for parsed in parsed_files
-            if parsed.result.success and parsed.result.syntax_tree is not None
-        }
 
     @property
     def analysis_id(self) -> str:
@@ -513,28 +351,32 @@ class DependencyAnalysis(Analysis):
                 continue  # defensive: RepositoryIR always groups by this exact name
 
             imports_by_qualifier = _imports_by_qualifier(file)
+
             for declaration in file.declarations:
                 if isinstance(declaration, ImportDeclaration):
                     _process_import(declaration, source_package, packages_by_name, collector)
 
-            tree = self._trees_by_path.get(file.relative_path)
-            if tree is None:
-                continue
-
-            for child in tree.root.named_children():
-                if child.type == "type_declaration":
-                    _process_type_declaration_for_deps(
-                        child,
-                        file,
+            for use in file.qualified_uses:
+                if use.kind == QualifiedUseKind.TYPE:
+                    _handle_qualified_type(
+                        use.qualifier,
+                        use.location,
+                        source_package,
+                        imports_by_qualifier,
+                        packages_by_name,
+                        collector,
+                    )
+                else:
+                    _handle_qualified_call(
+                        use.qualifier,
+                        use.location,
                         source_package,
                         imports_by_qualifier,
                         packages_by_name,
                         collector,
                     )
 
-            _walk_for_call_deps(
-                tree.root, file, source_package, imports_by_qualifier, packages_by_name, collector
-            )
+            _report_unsupported(file, collector)
 
         dependency_graph = collector.build()
         enriched_graph = _enrich_graph(graph, dependency_graph)

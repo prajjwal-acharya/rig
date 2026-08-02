@@ -12,10 +12,10 @@ from rig.analysis import (
     Capability,
 )
 from rig.analysis.callgraph import CALL_GRAPH_ANALYSIS_ID, CallEdge, CallGraph, CallGraphAnalysis
+from rig.frontends.go import GoIRBuilder
 from rig.graph.builders.structural import StructuralGraphBuilder
 from rig.graph.model import RelationshipType
 from rig.ir.builder import IRBuilderRegistry
-from rig.ir.builders.go import GoIRBuilder
 from rig.ir.repository import build_repository_ir
 from rig.languages import DEFAULT_REGISTRY
 from rig.languages.pipeline import LanguageAnnotatedFile
@@ -49,7 +49,7 @@ def _build_context(root: Path, relative_paths: list[str]) -> AnalysisContext:
     repository = build_repository_ir(root, parsed, ir_registry)
 
     symbols: SymbolTable = GoSymbolTableBuilder().build(repository)
-    references: ReferenceIndex = GoReferenceResolver(parsed).resolve(repository, symbols)
+    references: ReferenceIndex = GoReferenceResolver().resolve(repository, symbols)
     graph = StructuralGraphBuilder().build(repository)
 
     return AnalysisContext(
